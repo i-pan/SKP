@@ -2,6 +2,9 @@
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["skp"]
+
 [project]
 name = "skp"
 version = "0.0.0"
