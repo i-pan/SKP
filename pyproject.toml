@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skp"
+version = "0.0.0"
+requires-python = ">=3.9"
+authors = [
+  {name = "Ian Pan", email = "ianpan358@gmail.com"}	
+]
+dependencies = [
+  "albumentations>=1.4.24",
+  "einops",
+  "matplotlib",
+  "pandas",
+  "timm",
+  "torch>=1.9",
+]
+
+[project.optional-dependencies]
+monai = [
+  "monai"
+]
+full = [
+  "lightning>=2.4",
+  "monai",
+  "neptune",
+  "scikit-learn",
+  "torchmetrics"
+]
+

@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# custom
+experiments/
+gradio-demos/
+huggingface-models/
+run.sh
+sandbox.py
+.neptune/
