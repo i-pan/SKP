@@ -171,7 +171,7 @@ class SeparableConv2d(nn.Sequential):
         dilation: int = 1,
         bias: bool = True,
     ):
-        dephtwise_conv = nn.Conv2d(
+        depthwise_conv = nn.Conv2d(
             in_channels,
             in_channels,
             kernel_size,
@@ -182,4 +182,4 @@ class SeparableConv2d(nn.Sequential):
             bias=False,
         )
         pointwise_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
-        super().__init__(dephtwise_conv, pointwise_conv)
+        super().__init__(depthwise_conv, pointwise_conv)

@@ -10,7 +10,6 @@ from timm import create_model
 from typing import Dict
 
 from skp.configs.base import Config
-from skp.models.modules import FeatureReduction
 from skp.models.pooling import get_pool_layer
 from skp.models.utils import torch_load_weights, filter_weights_by_prefix
 
@@ -56,12 +55,22 @@ class Net(nn.Module):
         self.feature_dim = self.feature_dim * (2 if self.cfg.pool == "catavgmax" else 1)
         self.pooling = get_pool_layer(self.cfg, dim=2)
 
-        if isinstance(self.cfg.reduce_feature_dim, int):
-            self.backbone = nn.Sequential(
-                self.backbone,
-                FeatureReduction(self.feature_dim, self.cfg.reduce_feature_dim),
-            )
-            self.feature_dim = self.cfg.reduce_feature_dim
+        # main purpose of this was to reduce feature dimensions if
+        # passing features as input to a sequence model, thus
+        # reducing the # of parameters in the sequence model
+        #
+        # however, it's probably better to put the feature reduction
+        # module in the sequence model where it can be trained
+        # with the rest of the sequence model
+        #
+        # see skp/models/embed_seq/net2d_seq.py
+        #
+        # if isinstance(self.cfg.reduce_feature_dim, int):
+        #     self.backbone = nn.Sequential(
+        #         self.backbone,
+        #         FeatureReduction(self.feature_dim, self.cfg.reduce_feature_dim),
+        #     )
+        #     self.feature_dim = self.cfg.reduce_feature_dim
 
         self.dropout = nn.Dropout(p=self.cfg.dropout)
         self.linear = nn.Linear(self.feature_dim, self.cfg.num_classes)

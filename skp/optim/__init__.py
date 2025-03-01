@@ -12,6 +12,11 @@ from skp.optim.linear_warmup_cosine_annealing import LinearWarmupCosineAnnealing
 def get_optimizer(cfg: Config, model: nn.Module) -> Optimizer:
     if cfg.optimizer == "AdamP":
         return AdamP(model.parameters(), **cfg.optimizer_params)
+    if cfg.optimizer in {"Adam", "AdamW", "AdamP", "NAdam", "RAdam"}:
+        cfg.optimizer_params["betas"] = (
+            cfg.optimizer_params.pop("beta1", 0.9),
+            cfg.optimizer_params.pop("beta2", 0.999),
+        )
     return getattr(optim, cfg.optimizer)(
         params=model.parameters(), **cfg.optimizer_params
     )

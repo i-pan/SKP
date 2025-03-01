@@ -99,7 +99,7 @@ class MultilabelDiceScore(tm.Metric):
         if "pseudolabel" in batch:
             # ignore mask pseudolabels
             p, t = p[~batch["pseudolabel"]], t[~batch["pseudolabel"]]
-            
+
         if self.cfg.metric_labels_to_onehot:
             # if we are converting to onehot and using this metric
             # that means we have a multiclass classification problem
@@ -179,6 +179,50 @@ class MultilabelDiceScore(tm.Metric):
         )
 
         return metrics_dict
+
+
+class TotalSegmentatorForegroundDice(MultilabelDiceScore):
+    def update(self, out: Dict, batch: Dict) -> None:
+        # only makes sense if using sigmoid activation
+        assert self.cfg.activation_fn == "sigmoid"
+
+        p, t = out["logits"], batch["y"]
+
+        # p.shape = (N, C, [T], H, W)
+        # t.shape = (N, [T], H, W)
+
+        # get foreground preds and gt
+        if self.cfg.loss_params.get("invert_background", False):
+            # foreground class is index 0
+            p = p[:, 0]  # -> (N, [T], H, W)
+            t = (t > 0).float()
+        else:
+            assert self.cfg.loss_params.get("ignore_background", False)
+            # no specific background class
+            # take max across classes
+            p = p.amax(dim=1)
+            t = (t > 0).float()
+
+        p = p.sigmoid()
+        assert (
+            p.ndim == t.ndim
+        ), f"prediction [{p.ndim}] and label [{t.ndim}] tensors should have same # of dimensions"
+
+        p = torch.stack([p >= _th for _th in self.thresholds])
+        t = torch.stack([t] * len(self.thresholds))
+        if p.ndim == 5:
+            s = "n b t h w -> n b 1"
+        elif p.ndim == 4:
+            s = "n b h w -> n b 1"
+        else:
+            raise Exception(f"p is not a valid shape {p.shape}")
+
+        intersection = reduce(p * t, s, "sum")
+        denominator = reduce(p + t, s, "sum")
+
+        dice = (2 * intersection) / denominator
+
+        self.dice_scores.append(dice)
 
 
 # class MultilabelDiceScore(tm.Metric):

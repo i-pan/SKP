@@ -86,11 +86,20 @@ class Dataset(TorchDataset):
             data = self.get(i)
 
         x, y = data
+        empty = False
+        if y[2] == 0 or y[3] == 0:
+            # if width or height is 0, assume no box/empty image
+            empty = True
+            # albumentations won't work with all zero coords
+            y = [0, 0, 1, 1]
+
         orig_h, orig_w = x.shape[:2]
         # reformat for albumentations, need to add class label at end
         y = [list(y) + [0]]
         transformed = self.transforms(image=x, bboxes=y)
         x, y = transformed["image"], transformed["bboxes"]
+        if empty or len(y) == 0:
+            y = np.zeros((1, 5))
         x = torch.from_numpy(x)
         x = rearrange(x, "h w c -> c h w")
         y = torch.tensor(y[0][:4])

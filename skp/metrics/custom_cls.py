@@ -1,7 +1,9 @@
+import numpy as np 
 import torch
 
 from collections import defaultdict
-from sklearn.metrics import roc_auc_score, cohen_kappa_score
+from einops import rearrange
+from sklearn.metrics import log_loss, roc_auc_score, cohen_kappa_score
 from torchmetrics import Metric
 from typing import Callable, Dict, Tuple
 
@@ -725,4 +727,61 @@ class MelanomaAUROC(GroupedAUROC):
             metrics_dict[f"auc_{year}"] = self.auc(
                 t[group_indices == year], p[group_indices == year]
             )
+        return metrics_dict
+
+
+class ICHSeqClsAUROC(Metric):
+    def __init__(self, cfg: Config, dist_sync_on_step: bool = False):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+
+        self.cfg = cfg
+
+        self.add_state("p_seq", default=[], dist_reduce_fx=None)
+        self.add_state("t_seq", default=[], dist_reduce_fx=None)
+        self.add_state("p_cls", default=[], dist_reduce_fx=None)
+        self.add_state("t_cls", default=[], dist_reduce_fx=None)
+        self.add_state("mask", default=[], dist_reduce_fx=None)
+
+    def update(self, out: Dict, batch: Dict) -> None:
+        self.p_seq.append(out["logits_seq"].float())
+        self.t_seq.append(batch["y_seq"].float())
+        self.p_cls.append(out["logits_cls"].float())
+        self.t_cls.append(batch["y_cls"].float())
+        self.mask.append(batch["mask"])
+
+    def auc(self, t: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+        if len(t.unique()) == 1:
+            return torch.tensor(0.5)
+        t, p = t.numpy(), p.numpy()
+        return torch.tensor(roc_auc_score(y_true=t, y_score=p))
+
+    def compute_aucs(
+        self, t: torch.Tensor, p: torch.Tensor, suffix: str
+    ) -> Dict[str, torch.Tensor]:
+        metrics_dict = {}
+        num_classes = p.size(1)
+        for i in range(num_classes):
+            metrics_dict[f"auc{i}_{suffix}"] = self.auc(t[:, i], p[:, i])
+        metrics_dict[f"auc_mean_{suffix}"] = torch.stack(
+            [v for v in metrics_dict.values()]
+        ).mean()
+        return metrics_dict
+
+    def compute(self) -> Dict[str, torch.Tensor]:
+        p_cls = torch.cat(self.p_cls, dim=0).cpu()
+        t_cls = torch.cat(self.t_cls, dim=0).cpu()
+        metrics_dict = self.compute_aucs(t_cls, p_cls, "cls")
+        p_seq = torch.cat(self.p_seq, dim=0).cpu()
+        t_seq = torch.cat(self.t_seq, dim=0).cpu()
+        p_seq = rearrange(p_seq, "b n c -> (b n) c")
+        t_seq = rearrange(t_seq, "b n c -> (b n) c")
+        mask = torch.cat(self.mask, dim=0).cpu()
+        mask = rearrange(mask, "b n -> (b n)")
+        p_seq, t_seq = p_seq[~mask], t_seq[~mask]
+        metrics_dict.update(self.compute_aucs(t_seq, p_seq, "seq"))
+        size = len(p_seq)
+        p_seq = torch.cat([p_seq[:, i] for i in range(p_seq.shape[1])], dim=0).sigmoid().numpy()
+        t_seq = torch.cat([t_seq[:, i] for i in range(t_seq.shape[1])], dim=0).numpy()
+        sample_weights = [2] * size + [1] * (5 * size)
+        metrics_dict["log_loss_seq"] = log_loss(t_seq, p_seq, sample_weight=np.asarray(sample_weights))
         return metrics_dict

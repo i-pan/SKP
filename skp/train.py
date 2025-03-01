@@ -1,6 +1,7 @@
 import argparse
 import copy
 import json
+import numpy as np
 import os
 import pickle
 import lightning
@@ -12,16 +13,17 @@ import uuid
 
 from ast import literal_eval
 from importlib import import_module
-from optim import get_optimizer, get_scheduler
 from lightning.pytorch import callbacks as lightning_callbacks
 from lightning.pytorch.loggers import NeptuneLogger
 from lightning.pytorch.plugins import TorchSyncBatchNorm
 from lightning.pytorch.utilities import rank_zero_only
+from pathlib import Path
 from timm.layers import convert_sync_batchnorm
 from typing import Optional, Tuple
 
 from skp.callbacks import EMACallback, GPUStatsLogger
 from skp.configs.base import Config
+from skp.optim import get_optimizer, get_scheduler
 
 
 class TimmSyncBatchNorm(TorchSyncBatchNorm):
@@ -58,6 +60,7 @@ def parse_args():
     parser.add_argument("--devices", type=int, default=2)
     parser.add_argument("--accelerator", type=str, default="cuda")
     parser.add_argument("--num_nodes", type=int, default=1)
+    parser.add_argument("--gradient_clip_val", type=float, default=0.0)
     # default to benchmark=True, sync_batchnorm=True
     parser.add_argument("--no_benchmark", action="store_true")
     parser.add_argument("--no_sync_batchnorm", action="store_true")
@@ -484,6 +487,48 @@ def progressive_resizing(cfg: Config) -> None:
         save_ema_weights(trainer)
 
 
+def hyperparameter_sweep(cfg: Config) -> None:
+    from skp.toolbox.halton import generate_search
+
+    num_trials = cfg.hyperparameter_sweep["num_trials"]
+    _print_rank_zero(f"Running hyperparameter sweep ({num_trials} trials) ...\n")
+    search_space = {
+        k: v for k, v in cfg.hyperparameter_sweep.items() if k != "num_trials"
+    }
+    # set seed or will generate different hyperparams for each DDP process
+    np.random.seed(88)
+    hyperparameters = generate_search(search_space, num_trials)
+    for trial_idx, hyp_tuple in enumerate(hyperparameters):
+        for hyp in hyp_tuple._fields:
+            hyp_value = getattr(hyp_tuple, hyp)
+            if isinstance(hyp_value, float):
+                hyp_value_print = f"{hyp_value:0.3g}"
+            else:
+                hyp_value_print = f"{hyp_value}"
+            _print_rank_zero(f">>setting cfg.{hyp} to {hyp_value_print}")
+            if len(hyp.split("__")) > 1:
+                param_dict = hyp.split("__")[0]
+                if getattr(cfg, param_dict) is None:
+                    setattr(cfg, param_dict, {})
+                cfg.__dict__[param_dict][hyp.split("__")[1]] = hyp_value
+            else:
+                cfg.__dict__[hyp] = hyp_value
+
+        if trial_idx > 0:
+            # generate new run
+            save_dir = Path(cfg.save_dir).parent.absolute()
+            run_id = generate_random_run_id()
+            cfg.save_dir = os.path.join(save_dir, run_id)
+
+        task, cfg = get_task(cfg)
+        trainer, cfg = get_trainer(cfg)
+        trainer.fit(task)
+        symlink_best_model_path(trainer)
+        trainer.logger.experiment.stop()
+        sync_neptune_if_offline(cfg)
+        save_ema_weights(trainer)
+
+
 def main():
     # small bug in lightning causes neptune logging error (no impact on logging)
     # workaround to suppress printing of this error message
@@ -520,6 +565,10 @@ def main():
         _print_rank_zero(
             f"Running double (nested) cross-validation with outer split {cfg.double_cv} ..."
         )
+
+    keep_pretrained_weights_path = args.__dict__.pop(
+        "keep_pretrained_weights_path", False
+    )
     for fold in folds:
         _print_rank_zero(
             f"Running k-fold {kfold}, fold {fold} ...\n"
@@ -527,10 +576,13 @@ def main():
             else f"Running fold {fold} ...\n"
         )
         cfg.fold = fold
-        if not args.__dict__.pop("keep_pretrained_weights_path", False):
+        if not keep_pretrained_weights_path:
             cfg = change_fold_in_pretrained_weights_path(cfg)
-        if cfg.progressive_resizing:
+        if cfg.progressive_resizing is not None:
             progressive_resizing(cfg)
+            continue
+        if cfg.hyperparameter_sweep is not None:
+            hyperparameter_sweep(cfg)
             continue
         task, cfg = get_task(cfg)
         trainer, cfg = get_trainer(cfg)

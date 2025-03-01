@@ -1,5 +1,6 @@
 import albumentations as A
 import cv2
+import os
 
 from skp.configs import Config
 
@@ -13,16 +14,15 @@ cfg.project = "gradientecho/SKP"
 cfg.task = "classification"
 
 cfg.model = "classification.net2d"
-cfg.backbone = "maxvit_tiny_tf_512"
+cfg.backbone = "tf_efficientnetv2_m"
 cfg.pretrained = True
 cfg.num_input_channels = 3
-cfg.pool = "gem"
-cfg.pool_params = {"p": 3}
+cfg.pool = "avg"
 cfg.dropout = 0.1
 cfg.num_classes = 6
 cfg.normalization = "-1_1"
 cfg.normalization_params = {"min": 0, "max": 255}
-cfg.backbone_img_size = True
+cfg.backbone_img_size = False
 
 cfg.fold = 0
 cfg.dataset = "simple2dc"
@@ -30,27 +30,26 @@ cfg.data_dir = "/mnt/stor/datasets/kaggle/rsna-intracranial-hemorrhage-detection
 cfg.annotations_file = "/mnt/stor/datasets/kaggle/rsna-intracranial-hemorrhage-detection/train_slices_with_2dc_kfold.csv"
 cfg.inputs = "filepath_2dc"
 cfg.targets = [
+    "any",
     "epidural",
     "intraparenchymal",
     "intraventricular",
     "subarachnoid",
-    "intraparenchymal",
-    "any",
+    "subdural",
 ]
+# load each grayscale image then stack
 cfg.cv2_load_flag = cv2.IMREAD_GRAYSCALE
-cfg.num_workers = 16
+cfg.num_workers = os.cpu_count() // 2 - 1
 cfg.skip_failed_data = True
 cfg.pin_memory = True
 cfg.persistent_workers = True
-cfg.sampler = "IterationBasedSampler"
-cfg.num_iterations_per_epoch = 1000
 cfg.channel_reverse_aug = 0.5
 
 cfg.loss = "classification.BCEWithLogitsLoss"
 cfg.loss_params = {}
 
-cfg.batch_size = 16
-cfg.num_epochs = 10
+cfg.batch_size = 32
+cfg.num_epochs = 5
 cfg.optimizer = "AdamW"
 cfg.optimizer_params = {"lr": 3e-4}
 
@@ -58,7 +57,7 @@ cfg.scheduler = "LinearWarmupCosineAnnealingLR"
 cfg.scheduler_params = {"pct_start": 0.1, "div_factor": 100, "final_div_factor": 1_000}
 cfg.scheduler_interval = "step"
 
-cfg.val_batch_size = cfg.batch_size * 2
+cfg.val_batch_size = cfg.batch_size
 cfg.metrics = ["classification.AUROC"]
 cfg.val_metric = "auc_mean"
 cfg.val_track = "max"

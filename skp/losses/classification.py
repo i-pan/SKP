@@ -9,6 +9,7 @@ Losses take as argument the input and output dictionaries. This makes things mor
 flexible if you have more than the standard logits and labels.
 """
 
+import copy
 import torch
 
 from torch import nn
@@ -57,12 +58,19 @@ def _sigmoid_focal_loss(
 
 class BCEWithLogitsLoss(nn.BCEWithLogitsLoss):
     def __init__(self, params: Dict):
+        params = copy.deepcopy(params)
+        self.seq_mode = params.pop("seq_mode", False)
         if "pos_weight" in params:
             params["pos_weight"] = torch.tensor(params["pos_weight"])
         super().__init__(**params)
 
     def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
-        p, t = out["logits"], batch["y"]
+        if self.seq_mode:
+            p, t = out["logits_seq"], batch["y_seq"]
+            mask = batch["mask"]
+            p, t = p[mask], t[mask]
+        else:
+            p, t = out["logits"], batch["y"]
         _check_shapes_equal(p, t)
         return {"loss": super().forward(p.float(), t.float())}
 
@@ -124,11 +132,18 @@ class SoftTargetCrossEntropy(nn.Module):
 class FocalLoss(nn.Module):
     def __init__(self, params: Dict):
         super().__init__()
-        self.gamma = params["gamma"]
-        self.alpha = params["alpha"]
+        params = copy.deepcopy(params)
+        self.seq_mode = params.pop("seq_mode", False)
+        self.gamma = params.get("gamma", 2.0)
+        self.alpha = params.get("alpha", None)
 
     def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
-        p, t = out["logits"], batch["y"]
+        if self.seq_mode:
+            p, t = out["logits_seq"], batch["y_seq"]
+            mask = batch["mask"]
+            p, t = p[mask], t[mask]
+        else:
+            p, t = out["logits"], batch["y"]
         loss = _sigmoid_focal_loss(p, t, gamma=self.gamma, alpha=self.alpha)
         return {"loss": loss.mean()}
 

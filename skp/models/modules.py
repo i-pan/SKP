@@ -1,46 +1,71 @@
 """
-Contains commonly used neural net modules.
+Assortment of neural net modules.
 """
 
 import math
 import torch
 import torch.nn as nn
 
+from einops import rearrange
 from typing import Sequence
+
+
+class LayerNorm(nn.LayerNorm):
+    def forward(self, x):
+        # channels-first to channels-last and back
+        if x.ndim == 3:
+            pat1, pat2 = "n c d -> n d c", "n d c -> n c d"
+        elif x.ndim == 4:
+            pat1, pat2 = "n c h w -> n h w c", "n h w c -> n c h w"
+        elif x.ndim == 5:
+            pat1, pat2 = "n c t h w -> n t h w c", "n t h w c -> n c t h w"
+
+        x = rearrange(x, pat1)
+        x = super().forward(x)
+        x = rearrange(x, pat2)
+        return x
 
 
 class FeatureReduction(nn.Module):
     """
     Reduce feature dimensionality
-    Intended use is after the last layer of the neural net backbone, before pooling
-    Grouped convolution is used to reduce # of extra parameters
+    Grouped convolution can be used to reduce # of extra parameters
     """
 
-    def __init__(self, feature_dim: int, reduce_feature_dim: int):
+    def __init__(
+        self,
+        feature_dim: int,
+        reduce_feature_dim: int,
+        dim: int = 2,
+        reduce_grouped_conv: bool = False,
+        add_norm: bool = True,
+        add_act: bool = True,
+    ):
         super().__init__()
         groups = math.gcd(feature_dim, reduce_feature_dim)
-        self.reduce = nn.Conv2d(
+        self.reduce = getattr(nn, f"Conv{dim}d")(
             feature_dim,
             reduce_feature_dim,
-            groups=groups,
+            groups=groups if reduce_grouped_conv else 1,
             kernel_size=1,
             stride=1,
             bias=False,
         )
-        self.bn = nn.BatchNorm2d(reduce_feature_dim)
-        self.act = nn.ReLU()
+        self.norm = LayerNorm(reduce_feature_dim) if add_norm else nn.Identity()
+        self.act = nn.GELU() if add_act else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.bn(self.reduce(x)))
+        return self.act(self.norm(self.reduce(x)))
 
 
 class ConvWSO(nn.Module):
     """
     Learnable windowing convolution for CT images
-    Based on: 
+    Based on:
         https://github.com/MGH-LMIC/windows_optimization
         https://arxiv.org/pdf/1812.00572
     """
+
     def __init__(self, WL: Sequence[int], WW: Sequence[int], act_fn: str = "sigmoid"):
         super().__init__()
         assert len(WL) == len(WW)
@@ -65,7 +90,7 @@ class ConvWSO(nn.Module):
                 )
         self.conv.load_state_dict(state_dict)
 
-    def forward(self, x):
+    def forward(self, x) -> torch.Tensor:
         x = self.conv(x)
         if self.act_fn == "relu":
             x = torch.minimum(torch.relu(x), torch.tensor(self.upper).to(x.device))

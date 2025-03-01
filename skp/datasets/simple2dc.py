@@ -93,6 +93,7 @@ class Dataset(TorchDataset):
             data = self.get(i)
 
         x, y = data
+        # apply same transforms to each of the images
         x = {"image" if idx == 0 else f"image{idx}": img for idx, img in enumerate(x)}
         x_trf = self.transforms(**x)
         x = [x_trf["image"]] + [x_trf[f"image{idx}"] for idx in range(1, len(x))]

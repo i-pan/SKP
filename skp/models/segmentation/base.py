@@ -301,6 +301,11 @@ class Net(nn.Module):
     def load_pretrained_model(self) -> None:
         print(f"Loading pretrained model from {self.cfg.load_pretrained_model} ...")
         weights = torch_load_weights(self.cfg.load_pretrained_model)
+        segmenter_keys = [k for k in [*weights] if "segmenter" in k]
+        if len(segmenter_keys) > 0:
+            # if loading segmenter part of seg_cls model
+            for k in segmenter_keys:
+                weights[k.replace("segmenter.", "")] = weights.pop(k)
         encoder_weights = filter_weights_by_prefix(weights, "model.encoder.")
         decoder_weights = filter_weights_by_prefix(weights, "model.decoder.")
         self.encoder.load_state_dict(encoder_weights)

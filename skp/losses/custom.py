@@ -170,3 +170,114 @@ class MammoCancerWithAuxLosses(nn.Module):
 
         loss_dict["loss"] = sum(loss_dict.values())
         return loss_dict
+
+
+class ICHSeqMaskedBCELossWithAux(nn.Module):
+    def __init__(self, params: Dict):
+        super().__init__()
+        self.aux_weight = params.get("aux_weight", 0.4)
+
+    def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
+        p_seq, p_aux = out["logits_seq"], out["aux_logits_seq"]
+        t_seq = batch["y_seq"]
+
+        seq_loss = F.binary_cross_entropy_with_logits(p_seq, t_seq, reduction="none")
+        aux_loss = F.binary_cross_entropy_with_logits(p_aux, t_seq, reduction="none")
+
+        mask = batch["mask"]
+        seq_loss = seq_loss[mask]
+        aux_loss = aux_loss[mask]
+
+        # upweight any by 2
+        seq_loss = (seq_loss[:, 0] * 2 + seq_loss[:, 1:].sum(1)) / 7.0
+        seq_loss = seq_loss.mean()
+        aux_loss = (aux_loss[:, 0] * 2 + aux_loss[:, 1:].sum(1)) / 7.0
+        aux_loss = aux_loss.mean()
+
+        loss_dict = {"seq_loss": seq_loss, "aux_loss": aux_loss}
+        loss_dict["loss"] = seq_loss + self.aux_weight * aux_loss
+
+        return loss_dict
+
+
+class ICHSeqClsMaskedLoss(nn.Module):
+    def __init__(self, params: Dict):
+        super().__init__()
+        self.cls_weight = params.get("cls_weight", 1.0)
+        self.seq_weight = params.get("seq_weight", 1.0)
+
+    def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
+        p_seq, p_cls = out["logits_seq"], out["logits_cls"]
+        t_seq, t_cls = batch["y_seq"], batch["y_cls"]
+        seq_loss = F.binary_cross_entropy_with_logits(p_seq, t_seq, reduction="none")
+        seq_mask = batch["mask"]
+        seq_loss = seq_loss[~seq_mask]
+        # upweight any by 2
+        seq_loss = seq_loss[:, 0] * 2 + seq_loss[:, 1:].sum(1)
+        seq_loss = seq_loss / 7.0
+        seq_loss = seq_loss.mean()
+
+        cls_loss = F.binary_cross_entropy_with_logits(p_cls, t_cls, reduction="none")
+        # upweight any by 2
+        cls_loss = cls_loss[:, 0] * 2 + cls_loss[:, 1:].sum(1)
+        cls_loss = cls_loss / 7.0
+        cls_loss = cls_loss.mean()
+
+        loss_dict = {"seq_loss": seq_loss, "cls_loss": cls_loss}
+        loss_dict["loss"] = self.cls_weight * cls_loss + self.seq_weight * seq_loss
+        return loss_dict
+
+
+class ICHLogLoss(nn.Module):
+    def __init__(self, params: Dict):
+        super().__init__()
+        self.params = params
+
+    def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
+        p = out["logits"]
+        t = batch["y"]
+        assert p.size(1) == t.size(1) == 6
+        loss = F.binary_cross_entropy_with_logits(p, t, reduction="none")
+        # loss.shape = (B, 6)
+        sample_weights = torch.ones(loss.size(), device=p.device).float()
+        # upweight any class by 2
+        sample_weights[:, 0] = 2.0
+        loss = loss.reshape(-1) * sample_weights.reshape(-1)
+        loss = loss.sum() / sample_weights.sum()
+        loss_dict = {"loss": loss}
+        return loss_dict
+
+
+class ICHLogLossSeqWithAux(nn.Module):
+    def __init__(self, params: Dict):
+        super().__init__()
+        self.aux_weight = params.get("aux_weight", 0.2)
+
+    @staticmethod
+    def calculate_loss(
+        p: torch.Tensor, t: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        loss = F.binary_cross_entropy_with_logits(p, t, reduction="none")
+        # loss.shape = (B, N, 6)
+        B = loss.size(0)
+        sample_weights = torch.ones(loss.size(), device=p.device).float()
+        # upweight any class by 2
+        sample_weights[:, :, 0] = 2.0
+        sample_weights = sample_weights.reshape(B, -1)
+        loss = loss.reshape(B, -1) * sample_weights
+        mask = mask.reshape(B, -1)
+        loss = loss[mask].sum() / sample_weights[mask].sum()
+        return loss 
+        
+    def forward(self, out: Dict, batch: Dict) -> Dict[str, torch.Tensor]:
+        p, p_aux = out["logits_seq"], out["aux_logits_seq"]
+        t = batch["y_seq"]
+        mask = batch["mask"].unsqueeze(2).expand(-1, -1, 6)
+        assert p.size(2) == t.size(2) == 6
+        seq_loss = self.calculate_loss(p, t, mask)
+        aux_loss = self.calculate_loss(p_aux, t, mask)
+        loss_dict = {}
+        loss_dict["seq_loss"] = seq_loss
+        loss_dict["aux_loss"] = aux_loss
+        loss_dict["loss"] = seq_loss + self.aux_weight * aux_loss
+        return loss_dict
